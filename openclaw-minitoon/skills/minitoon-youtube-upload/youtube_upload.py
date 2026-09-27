@@ -38,10 +38,13 @@ def credentials(interactive: bool = False) -> Credentials:
     return creds
 
 
-def upload(video: str, title: str, description: str, tags: list[str], privacy: str) -> str:
+def upload(video: str, title: str, description: str, tags: list[str], privacy: str,
+           short: bool = True) -> str:
     youtube = build("youtube", "v3", credentials=credentials())
-    if "#shorts" not in (title + description).lower():
+    if short and "#shorts" not in (title + description).lower():
         description = f"{description}\n\n#Shorts".strip()
+    if not short:
+        description = description.replace("#Shorts", "").replace("#shorts", "").strip()
     body = {
         "snippet": {"title": title[:100], "description": description[:5000],
                     "tags": tags, "categoryId": "1"},  # Film & Animation
@@ -57,7 +60,8 @@ def upload(video: str, title: str, description: str, tags: list[str], privacy: s
     response = None
     while response is None:
         _, response = request.next_chunk()
-    return f"https://youtube.com/shorts/{response['id']} ({privacy})"
+    kind = "shorts/" if short else "watch?v="
+    return f"https://youtube.com/{kind}{response['id']} ({privacy})"
 
 
 if __name__ == "__main__":
@@ -67,12 +71,14 @@ if __name__ == "__main__":
     p.add_argument("--description", default="")
     p.add_argument("--tags", default="")
     p.add_argument("--privacy", default="private", choices=["public", "unlisted", "private"])
+    p.add_argument("--wide", action="store_true", help="regular 16:9 video, not a Short")
     p.add_argument("--login", action="store_true")
     a = p.parse_args()
     if a.login:
         credentials(interactive=True)
         print(f"Signed in. Token saved to {TOKEN}")
     elif a.video and a.title:
-        print(upload(a.video, a.title, a.description, [t.strip() for t in a.tags.split(",") if t.strip()], a.privacy))
+        tags = [t.strip() for t in a.tags.split(",") if t.strip()]
+        print(upload(a.video, a.title, a.description, tags, a.privacy, short=not a.wide))
     else:
         p.error("give VIDEO and --title, or --login")

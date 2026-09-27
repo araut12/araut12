@@ -28,8 +28,9 @@ Today's working folder: `~/.openclaw/workspace-minitoon/output/daily/<YYYY-MM-DD
    Reply "new idea" for a different story, or tell me what to change.
 
    Each Gemini prompt must be self-contained and start with:
-   "Use the attached bunny as the character, keep her exactly the same. Vertical 9:16 image, 3D Pixar style: "
-   followed by the scene's action and place.
+   "Use the attached bunny as the character, keep her exactly the same. Wide 16:9 landscape image, character in the center, 3D Pixar style: "
+   followed by the scene's action and place. (Wide pictures work for both the regular video and the
+   Short, because the Short zooms in on the center.)
 
 ## B. The user replies in Telegram
 
@@ -42,13 +43,17 @@ Today's working folder: `~/.openclaw/workspace-minitoon/output/daily/<YYYY-MM-DD
   best shows it (look at each picture briefly), skip near-duplicates, and tell the user the mapping
   in one line.
 - When all scenes have pictures (or the user says "go" / "make it"), set `"status": "rendering"`,
-  reply "🎬 Making the video now, about 10 minutes", then:
-  1. Render with the `minitoon-render` skill, using today's `episode.json`.
-  2. Write the YouTube title, description and tags with `minitoon-youtube-optimizer`.
-  3. Upload with `minitoon-youtube-upload` (public).
-  4. Set `"status": "posted"` and `"youtube"` in `episode.json`, then reply with the title and the
-     YouTube link. Also attach the MP4 if possible.
-  If a step fails, reply with the exact error and what the user can do. Never upload twice in a day.
+  reply "🎬 Making the videos now, about 15 minutes", then make BOTH versions every day:
+  1. Short: render with the `minitoon-render` skill (default 9:16), using today's `episode.json`.
+  2. Wide: render again with `--format 16:9 --reuse <folder of the Short's MP4>`. This reuses the
+     voice, animation and music, so it takes about a minute and uses no extra free quota.
+  3. Write the YouTube title, description and tags with `minitoon-youtube-optimizer`.
+  4. Upload both with `minitoon-youtube-upload` (public): the Short normally, and the wide one with
+     `--wide` (a regular video, no #Shorts).
+  5. Set `"status": "posted"` and `"youtube": {"short": <link>, "wide": <link>}` in `episode.json`,
+     then reply with the title and both YouTube links.
+  If a step fails, reply with the exact error and what the user can do. Upload at most one Short and
+  one wide video per day.
 
 ## Rules
 - Keep Telegram messages short. No walls of text apart from the prompt list.

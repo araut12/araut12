@@ -39,5 +39,7 @@ Turns an approved story into a real video file. Costs nothing.
    ```bash
    ~/.openclaw/venv-media/bin/python ~/.openclaw/workspace-minitoon/skills/minitoon-render/render.py output/episode.json
    ```
+   For the wide regular video, run it again with
+   `--format 16:9 --reuse <folder of the first MP4>` (reuses voice, animation and music).
 4. The last line printed is the MP4 path. Report it, with the title, scene count, and the
    "done:" line (Gemini images, animated scenes, length). If it fails, retry once, then report the error.

@@ -308,8 +308,10 @@ def main() -> None:
         img, audio = work / f"s{n:02d}.png", work / f"s{n:02d}.mp3"
         anim, clip = work / f"s{n:02d}-anim.mp4", work / f"s{n:02d}.mp4"
         log(f"scene {n}/{len(scenes)}: motion")
+        # Animate the original picture (not the fitted frame), so the clip suits both formats.
+        raw = work / f"s{n:02d}-raw.png"
         ok = reused(anim.name, anim) or (
-            i in to_animate and animate(img, scene.get("motion", scene["image"]), duration(audio), anim))
+            i in to_animate and animate(raw, scene.get("motion", scene["image"]), duration(audio), anim))
         animated += ok
         make_clip(n, img, audio, anim if ok else None, clip)
         clips.append(clip)

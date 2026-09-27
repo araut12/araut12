@@ -13,10 +13,11 @@ description: "Upload a finished Minitoon MP4 to YouTube as a Short (marked Made 
    ~/.openclaw/venv-youtube/bin/python ~/.openclaw/workspace-minitoon/skills/minitoon-youtube-upload/youtube_upload.py \
      "<mp4 path>" --title "<title>" --description "<description>" --tags "<tag1,tag2,...>" --privacy public
    ```
+   For the regular wide (16:9) version, add `--wide`. It is uploaded as a normal video, not a Short.
 3. Reply with the YouTube link it prints.
 
 ## Rules
 
-- Upload at most ONE video per day. Never upload the same MP4 twice.
+- Upload at most one Short and one wide video per day. Never upload the same MP4 twice.
 - If it says "not signed in", stop and tell the user to run the `--login` command. Never try to sign in yourself.
 - If the upload fails, report the error. Do not retry more than once.
