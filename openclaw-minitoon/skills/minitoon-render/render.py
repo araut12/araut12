@@ -11,7 +11,8 @@ Assembly:  ffmpeg.
 Keys (optional but recommended), one per file:
   ~/.openclaw/secrets/gemini_key   ~/.openclaw/secrets/hf_token
 
-Usage: render.py episode.json      (prints the final .mp4 path)
+Usage: render.py episode.json [--format 16:9] [--reuse EARLIER_RENDER_DIR]
+       (prints the final .mp4 path)
 """
 import base64
 import json
@@ -26,6 +27,7 @@ import urllib.request
 from pathlib import Path
 
 W, H, FPS = 1080, 1920, 30
+ASPECT = "9:16"
 HERE = Path(__file__).resolve().parent
 VENV = Path.home() / ".openclaw/venv-media/bin"
 SECRETS = Path.home() / ".openclaw/secrets"
@@ -84,7 +86,7 @@ def gemini_image(prompt: str, refs: list[Path], dest: Path) -> bool:
     parts.append({"text": prompt})
     body = json.dumps({
         "contents": [{"parts": parts}],
-        "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": "9:16"}},
+        "generationConfig": {"responseModalities": ["IMAGE"], "imageConfig": {"aspectRatio": ASPECT}},
     }).encode()
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{IMAGE_MODEL}:generateContent"
     for attempt in range(3):
@@ -125,22 +127,38 @@ def pollinations_image(prompt: str, seed: int, dest: Path) -> None:
     raise SystemExit(f"Could not generate image for: {prompt}")
 
 
-def make_vertical(src: Path, dest: Path) -> None:
-    """Fit any picture into 1080x1920. Wide pictures sit on a blurred copy of themselves."""
+def dims(path: Path) -> tuple[int, int]:
     out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                          "stream=width,height", "-of", "csv=p=0", str(src)],
+                          "stream=width,height", "-of", "csv=p=0", str(path)],
                          capture_output=True, text=True, check=True)
     w, h = (int(x) for x in out.stdout.strip().split(",")[:2])
-    if w / h <= 0.7:
-        vf = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}"
-        run("ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vf", vf, "-frames:v", "1", str(dest))
+    return w, h
+
+
+def fit_graph(src: Path, pre: str = "") -> str:
+    """filter_complex that fits src into the W x H frame, ending in [v].
+
+    Same shape: fill and crop. Otherwise the picture sits on a blurred copy of itself.
+    """
+    w, h = dims(src)
+    head = f"[0:v]{pre + ',' if pre else ''}"
+    if abs(w / h - W / H) < 0.15 * (W / H):
+        return f"{head}scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[v]"
+    bg = f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=30:2,eq=brightness=-0.05"
+    if w / h > W / H:
+        # Wide picture in a tall frame: zoom in a bit so the character fills more of it.
+        fg = f"scale={int(W * 1.45)}:-2,crop={W}:ih"
+        pos = "0:(H-h)/2"
     else:
-        # Wide picture: zoom it in a bit so the character fills more of the tall frame.
-        fg_w = int(W * 1.45)
-        run("ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-filter_complex",
-            f"[0]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},boxblur=30:2,eq=brightness=-0.05[bg];"
-            f"[0]scale={fg_w}:-2,crop={W}:ih[fg];[bg][fg]overlay=0:(H-h)/2",
-            "-frames:v", "1", str(dest))
+        # Tall picture in a wide frame: full height, centered.
+        fg = f"scale=-2:{H}"
+        pos = "(W-w)/2:0"
+    return f"{head}split[a][b];[a]{bg}[bg];[b]{fg}[fg];[bg][fg]overlay={pos}[v]"
+
+
+def fit_frame(src: Path, dest: Path) -> None:
+    run("ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-filter_complex", fit_graph(src),
+        "-map", "[v]", "-frames:v", "1", str(dest))
 
 
 # ---------- animation ----------
@@ -207,27 +225,46 @@ def make_clip(i: int, img: Path, audio: Path, anim: Path | None, clip: Path) -> 
     if anim:
         # Play the animation, slowed a little if the narration is longer, then hold the last frame.
         speed = min(1.6, max(1.0, length / max(0.5, duration(anim))))
-        vf = (f"setpts={speed:.3f}*PTS,fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase,"
-              f"crop={W}:{H},tpad=stop_mode=clone:stop_duration={length:.2f},{fade}")
+        graph = (fit_graph(anim, f"setpts={speed:.3f}*PTS,fps={FPS}")[:-3] +
+                 f"[f];[f]tpad=stop_mode=clone:stop_duration={length:.2f},{fade}[v]")
         video_in = ["-i", str(anim)]
     else:
         frames = int(length * FPS)
         zoom = "min(zoom+0.0009,1.15)" if i % 2 else "if(eq(on,0),1.15,max(zoom-0.0009,1.0))"
-        vf = (f"scale={W * 3 // 2}:{H * 3 // 2},zoompan=z='{zoom}':d={frames}"
-              f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={FPS},{fade}")
+        graph = (f"[0:v]scale={W * 3 // 2}:{H * 3 // 2},zoompan=z='{zoom}':d={frames}"
+                 f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={FPS},{fade}[v]")
         video_in = ["-loop", "1", "-i", str(img)]
     run("ffmpeg", "-y", "-loglevel", "error", *video_in, "-i", str(audio),
-        "-map", "0:v", "-map", "1:a", "-vf", vf, "-af", "apad", "-t", f"{length:.2f}",
+        "-filter_complex", graph, "-map", "[v]", "-map", "1:a", "-af", "apad", "-t", f"{length:.2f}",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
         "-c:a", "aac", "-ar", "44100", "-ac", "2", str(clip))
 
 
 def main() -> None:
-    spec = json.loads(Path(sys.argv[1]).read_text())
+    global W, H, ASPECT
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("episode")
+    p.add_argument("--format", choices=["9:16", "16:9"], default="9:16",
+                   help="9:16 = YouTube Shorts (default), 16:9 = regular wide video")
+    p.add_argument("--reuse", help="earlier render folder: reuse its voice, animation and music")
+    args = p.parse_args()
+    if args.format == "16:9":
+        W, H, ASPECT = 1920, 1080, "16:9"
+    reuse = Path(args.reuse).expanduser() if args.reuse else None
+
+    def reused(name: str, dest: Path) -> bool:
+        if reuse and (reuse / name).exists():
+            shutil.copy(reuse / name, dest)
+            return True
+        return False
+
+    spec = json.loads(Path(args.episode).read_text())
     style = spec.get("style", DEFAULT_STYLE)
     voice = spec.get("voice", "en-US-AnaNeural")
     scenes = spec["scenes"]
-    work = OUT_ROOT / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug(spec['title'])}"
+    suffix = "-wide" if ASPECT == "16:9" else ""
+    work = OUT_ROOT / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug(spec['title'])}{suffix}"
     work.mkdir(parents=True, exist_ok=True)
     log(f"gemini images: {'on' if GEMINI_KEY else 'off (no key)'}, hf token: {'yes' if HF_TOKEN else 'no'}, "
         f"animating up to {MAX_ANIMATED} scenes")
@@ -242,7 +279,8 @@ def main() -> None:
         img, audio = work / f"s{n:02d}.png", work / f"s{n:02d}.mp3"
         log(f"scene {n}/{len(scenes)}: picture + voice")
         raw = work / f"s{n:02d}-raw.png"
-        prompt = f"{scene['image']}. Style: {style}. Vertical 9:16 composition, character centered."
+        shape = "Vertical 9:16" if ASPECT == "9:16" else "Wide 16:9"
+        prompt = f"{scene['image']}. Style: {style}. {shape} composition, character centered."
         given = Path(scene["image_file"]).expanduser() if scene.get("image_file") else None
         if given and given.exists():
             shutil.copy(given, raw)  # picture supplied by the user (e.g. made in the Gemini app)
@@ -252,15 +290,17 @@ def main() -> None:
                 refs = [raw]  # first scene becomes the character reference for the rest
         else:
             pollinations_image(prompt, seed=1000 + n, dest=raw)
-        make_vertical(raw, img)
-        run(str(VENV / "edge-tts"), "--voice", voice, f"--rate={spec.get('voice_rate', '-5%')}",
-            f"--pitch={spec.get('voice_pitch', '+5Hz')}", "--text", scene["narration"], "--write-media", str(audio))
+        fit_frame(raw, img)
+        if not reused(audio.name, audio):
+            run(str(VENV / "edge-tts"), "--voice", voice, f"--rate={spec.get('voice_rate', '-5%')}",
+                f"--pitch={spec.get('voice_pitch', '+5Hz')}", "--text", scene["narration"],
+                "--write-media", str(audio))
 
     # Music first: it gets the free GPU quota before animation uses up the rest.
     estimate = sum(duration(work / f"s{i + 1:02d}.mp3") + 0.6 for i in range(len(scenes)))
     music = work / "music.wav"
     log("music")
-    have_music = make_music(spec, estimate + 1, music)
+    have_music = reused(music.name, music) or make_music(spec, estimate + 1, music)
 
     clips, animated = [], 0
     for i, scene in enumerate(scenes):
@@ -268,7 +308,8 @@ def main() -> None:
         img, audio = work / f"s{n:02d}.png", work / f"s{n:02d}.mp3"
         anim, clip = work / f"s{n:02d}-anim.mp4", work / f"s{n:02d}.mp4"
         log(f"scene {n}/{len(scenes)}: motion")
-        ok = i in to_animate and animate(img, scene.get("motion", scene["image"]), duration(audio), anim)
+        ok = reused(anim.name, anim) or (
+            i in to_animate and animate(img, scene.get("motion", scene["image"]), duration(audio), anim))
         animated += ok
         make_clip(n, img, audio, anim if ok else None, clip)
         clips.append(clip)
