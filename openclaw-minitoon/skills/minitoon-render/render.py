@@ -217,27 +217,62 @@ def make_music(spec: dict, seconds: float, dest: Path) -> bool:
         return False
 
 
+
+
+def get_song(spec: dict, dest: Path) -> bool:
+    """Whole-video song: the user's MP3 (e.g. from Suno), else ACE-Step sings `song_lyrics`."""
+    given = Path(spec["song_file"]).expanduser() if spec.get("song_file") else None
+    if given and given.exists():
+        run("ffmpeg", "-y", "-loglevel", "error", "-i", str(given), "-ac", "2", "-ar", "44100", str(dest))
+        return True
+    if spec.get("song_lyrics"):
+        log("  singing the lyrics with ACE-Step")
+        return ace_music(spec.get("song_style", spec.get("music", DEFAULT_MUSIC)) + ", clear child-friendly vocals",
+                         spec["song_lyrics"], float(spec.get("song_seconds", 60)), dest)
+    return False
+
+
 # ---------- assembly ----------
 
-def make_clip(i: int, img: Path, audio: Path, anim: Path | None, clip: Path) -> None:
-    length = duration(audio) + 0.6
+def boomerang(anim: Path, length: float, dest: Path) -> None:
+    """Loop a short animation forward-backward to fill a longer song section."""
+    run("ffmpeg", "-y", "-loglevel", "error", "-i", str(anim), "-filter_complex",
+        f"[0:v]fps={FPS},split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0,"
+        "loop=loop=-1:size=32767:start=0[v]",
+        "-map", "[v]", "-t", f"{length:.2f}", "-an", "-c:v", "libx264", "-preset", "veryfast",
+        "-crf", "18", str(dest))
+
+
+def make_clip(i: int, img: Path, anim: Path | None, clip: Path, length: float,
+              audio: Path | None = None) -> None:
     fade = f"fade=t=in:st=0:d=0.25,fade=t=out:st={length - 0.25:.2f}:d=0.25,format=yuv420p"
     if anim:
-        # Play the animation, slowed a little if the narration is longer, then hold the last frame.
+        # Slow the animation a little if the section is longer, then hold the last frame.
         speed = min(1.6, max(1.0, length / max(0.5, duration(anim))))
         graph = (fit_graph(anim, f"setpts={speed:.3f}*PTS,fps={FPS}")[:-3] +
                  f"[f];[f]tpad=stop_mode=clone:stop_duration={length:.2f},{fade}[v]")
         video_in = ["-i", str(anim)]
     else:
         frames = int(length * FPS)
-        zoom = "min(zoom+0.0009,1.15)" if i % 2 else "if(eq(on,0),1.15,max(zoom-0.0009,1.0))"
+        step = 0.15 / max(1, frames)  # always zoom 15% over the clip, however long it is
+        zoom = f"min(zoom+{step:.6f},1.15)" if i % 2 else f"if(eq(on,0),1.15,max(zoom-{step:.6f},1.0))"
         graph = (f"[0:v]scale={W * 3 // 2}:{H * 3 // 2},zoompan=z='{zoom}':d={frames}"
                  f":x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={W}x{H}:fps={FPS},{fade}[v]")
         video_in = ["-loop", "1", "-i", str(img)]
-    run("ffmpeg", "-y", "-loglevel", "error", *video_in, "-i", str(audio),
+    audio_in = ["-i", str(audio)] if audio else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
+    run("ffmpeg", "-y", "-loglevel", "error", *video_in, *audio_in,
         "-filter_complex", graph, "-map", "[v]", "-map", "1:a", "-af", "apad", "-t", f"{length:.2f}",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
         "-c:a", "aac", "-ar", "44100", "-ac", "2", str(clip))
+
+
+def join(clips: list[Path], work: Path) -> Path:
+    listing = work / "clips.txt"
+    listing.write_text("".join(f"file '{c.name}'\n" for c in clips))
+    joined = work / "joined.mp4"
+    run("ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
+        "-i", str(listing), "-c", "copy", str(joined))
+    return joined
 
 
 def main() -> None:
@@ -247,7 +282,7 @@ def main() -> None:
     p.add_argument("episode")
     p.add_argument("--format", choices=["9:16", "16:9"], default="9:16",
                    help="9:16 = YouTube Shorts (default), 16:9 = regular wide video")
-    p.add_argument("--reuse", help="earlier render folder: reuse its voice, animation and music")
+    p.add_argument("--reuse", help="earlier render folder: reuse its song/voice, animation and music")
     args = p.parse_args()
     if args.format == "16:9":
         W, H, ASPECT = 1920, 1080, "16:9"
@@ -276,9 +311,8 @@ def main() -> None:
     gemini_used = 0
     for i, scene in enumerate(scenes):
         n = i + 1
-        img, audio = work / f"s{n:02d}.png", work / f"s{n:02d}.mp3"
-        log(f"scene {n}/{len(scenes)}: picture + voice")
-        raw = work / f"s{n:02d}-raw.png"
+        log(f"scene {n}/{len(scenes)}: picture")
+        raw, img = work / f"s{n:02d}-raw.png", work / f"s{n:02d}.png"
         shape = "Vertical 9:16" if ASPECT == "9:16" else "Wide 16:9"
         prompt = f"{scene['image']}. Style: {style}. {shape} composition, character centered."
         given = Path(scene["image_file"]).expanduser() if scene.get("image_file") else None
@@ -291,40 +325,64 @@ def main() -> None:
         else:
             pollinations_image(prompt, seed=1000 + n, dest=raw)
         fit_frame(raw, img)
-        if not reused(audio.name, audio):
-            run(str(VENV / "edge-tts"), "--voice", voice, f"--rate={spec.get('voice_rate', '-5%')}",
-                f"--pitch={spec.get('voice_pitch', '+5Hz')}", "--text", scene["narration"],
-                "--write-media", str(audio))
 
-    # Music first: it gets the free GPU quota before animation uses up the rest.
-    estimate = sum(duration(work / f"s{i + 1:02d}.mp3") + 0.6 for i in range(len(scenes)))
-    music = work / "music.wav"
-    log("music")
-    have_music = reused(music.name, music) or make_music(spec, estimate + 1, music)
+    # Sound comes first: it gets the free GPU quota before animation uses up the rest.
+    song = work / "song.wav"
+    log("song")
+    song_mode = reused(song.name, song) or get_song(spec, song)
+
+    if song_mode:
+        # Whole video is the song: split its length across the scenes by how much each one sings.
+        total = min(duration(song), 175.0)  # Shorts can be up to 3 minutes
+        weights = [max(1, len((s.get("lyrics") or s.get("narration") or "x").split())) for s in scenes]
+        lengths = [total * w / sum(weights) for w in weights]
+        music, have_music = None, False
+    else:
+        log("no song, using narration + background music")
+        for i, scene in enumerate(scenes):
+            audio = work / f"s{i + 1:02d}.mp3"
+            if not reused(audio.name, audio):
+                run(str(VENV / "edge-tts"), "--voice", voice, f"--rate={spec.get('voice_rate', '-5%')}",
+                    f"--pitch={spec.get('voice_pitch', '+5Hz')}", "--text", scene["narration"],
+                    "--write-media", str(audio))
+        lengths = [duration(work / f"s{i + 1:02d}.mp3") + 0.6 for i in range(len(scenes))]
+        music = work / "music.wav"
+        have_music = reused(music.name, music) or make_music(spec, sum(lengths) + 1, music)
 
     clips, animated = [], 0
     for i, scene in enumerate(scenes):
         n = i + 1
-        img, audio = work / f"s{n:02d}.png", work / f"s{n:02d}.mp3"
+        img, raw = work / f"s{n:02d}.png", work / f"s{n:02d}-raw.png"
         anim, clip = work / f"s{n:02d}-anim.mp4", work / f"s{n:02d}.mp4"
         log(f"scene {n}/{len(scenes)}: motion")
         # Animate the original picture (not the fitted frame), so the clip suits both formats.
-        raw = work / f"s{n:02d}-raw.png"
         ok = reused(anim.name, anim) or (
-            i in to_animate and animate(raw, scene.get("motion", scene["image"]), duration(audio), anim))
+            i in to_animate and animate(raw, scene.get("motion", scene["image"]), lengths[i], anim))
         animated += ok
-        make_clip(n, img, audio, anim if ok else None, clip)
+        if ok and song_mode and lengths[i] > duration(anim) * 1.3:
+            looped = work / f"s{n:02d}-loop.mp4"
+            boomerang(anim, lengths[i], looped)
+            anim = looped
+        audio = None if song_mode else work / f"s{n:02d}.mp3"
+        make_clip(n, img, anim if ok else None, clip, lengths[i], audio)
         clips.append(clip)
 
-    listing = work / "clips.txt"
-    listing.write_text("".join(f"file '{c.name}'\n" for c in clips))
-    joined = work / "joined.mp4"
-    run("ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
-        "-i", str(listing), "-c", "copy", str(joined))
+    joined = join(clips, work)
     total = duration(joined)
-
+    # Scene start/end times, used to cut the video into Shorts at scene boundaries.
+    t, timeline = 0.0, []
+    for i, c in enumerate(clips):
+        d = duration(c)
+        timeline.append({"scene": i + 1, "start": round(t, 2), "end": round(t + d, 2)})
+        t += d
+    (work / "timeline.json").write_text(json.dumps(timeline, indent=2))
     final = work / f"{slug(spec['title'])}.mp4"
-    if have_music:
+    if song_mode:
+        run("ffmpeg", "-y", "-loglevel", "error", "-i", str(joined), "-i", str(song),
+            "-filter_complex", f"[1:a]afade=t=out:st={max(0, total - 2):.2f}:d=2,loudnorm=I=-14:TP=-1.5:LRA=11[a]",
+            "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+            "-t", f"{total:.2f}", "-movflags", "+faststart", str(final))
+    elif have_music:
         # Music ducks under the narration and comes up between lines; fades out at the end.
         run("ffmpeg", "-y", "-loglevel", "error", "-i", str(joined), "-stream_loop", "-1", "-i", str(music),
             "-filter_complex",
@@ -339,7 +397,8 @@ def main() -> None:
         shutil.copy(joined, final)
 
     (work / "episode.json").write_text(json.dumps(spec, indent=2))
-    log(f"done: {len(scenes)} scenes, {gemini_used} Gemini images, {animated} animated, {total:.0f}s")
+    mode = "song" if song_mode else "narration"
+    log(f"done: {len(scenes)} scenes, {mode}, {gemini_used} Gemini images, {animated} animated, {total:.0f}s")
     print(final)
 
 

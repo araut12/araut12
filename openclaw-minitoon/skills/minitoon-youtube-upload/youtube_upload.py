@@ -39,7 +39,7 @@ def credentials(interactive: bool = False) -> Credentials:
 
 
 def upload(video: str, title: str, description: str, tags: list[str], privacy: str,
-           short: bool = True) -> str:
+           short: bool = True, publish_at: str | None = None) -> str:
     youtube = build("youtube", "v3", credentials=credentials())
     if short and "#shorts" not in (title + description).lower():
         description = f"{description}\n\n#Shorts".strip()
@@ -55,13 +55,18 @@ def upload(video: str, title: str, description: str, tags: list[str], privacy: s
             "containsSyntheticMedia": True,
         },
     }
+    if publish_at:
+        # Scheduled: stays private until publish_at (RFC 3339), then YouTube makes it public.
+        body["status"]["privacyStatus"] = "private"
+        body["status"]["publishAt"] = publish_at
     media = MediaFileUpload(video, mimetype="video/mp4", chunksize=8 << 20, resumable=True)
     request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
     response = None
     while response is None:
         _, response = request.next_chunk()
     kind = "shorts/" if short else "watch?v="
-    return f"https://youtube.com/{kind}{response['id']} ({privacy})"
+    when = f"scheduled {publish_at}" if publish_at else privacy
+    return f"https://youtube.com/{kind}{response['id']} ({when})"
 
 
 if __name__ == "__main__":
@@ -72,6 +77,7 @@ if __name__ == "__main__":
     p.add_argument("--tags", default="")
     p.add_argument("--privacy", default="private", choices=["public", "unlisted", "private"])
     p.add_argument("--wide", action="store_true", help="regular 16:9 video, not a Short")
+    p.add_argument("--publish-at", help="schedule: RFC 3339 time, e.g. 2026-09-28T14:00:00+08:00")
     p.add_argument("--login", action="store_true")
     a = p.parse_args()
     if a.login:
@@ -79,6 +85,7 @@ if __name__ == "__main__":
         print(f"Signed in. Token saved to {TOKEN}")
     elif a.video and a.title:
         tags = [t.strip() for t in a.tags.split(",") if t.strip()]
-        print(upload(a.video, a.title, a.description, tags, a.privacy, short=not a.wide))
+        print(upload(a.video, a.title, a.description, tags, a.privacy, short=not a.wide,
+                     publish_at=a.publish_at))
     else:
         p.error("give VIDEO and --title, or --login")
