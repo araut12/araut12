@@ -212,6 +212,7 @@ def pitch(day: str, dry: bool) -> None:
                           parse_prompts)
 
     ep = {"title": s["title"], "summary": s["summary"], "lesson": s["lesson"], "status": "waiting_for_pictures",
+          "pitched_at": time.time(),
           "song_style": song["song_style"], "song_lyrics": song["song_lyrics"], "song_seconds": song["song_seconds"],
           "quality_fixes": [f"{a}: {b}" for a, b in fixes],
           "scenes": [{"image": f"{sc.get('ACTION', '')} at {sc.get('PLACE', '')}", "gemini_prompt": prompts[i],
@@ -232,11 +233,24 @@ def pitch(day: str, dry: bool) -> None:
 
 def publish(day: str, dry: bool) -> None:
     ep_path = DAILY / day / "episode.json"
+    # One publish at a time per day, whoever starts it (intake, chat or by hand).
+    import fcntl
+    lock = open(ep_path.parent / ".publish.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit("FAILED: a publish for this day is already running")
     ep = json.loads(ep_path.read_text())
+    if ep.get("status") == "posted" and not dry:
+        raise SystemExit(f"FAILED: already posted: {ep.get('youtube')}")
+    if not dry:
+        ep["status"] = "rendering"
+        ep_path.write_text(json.dumps(ep, indent=2))
     missing = [i + 1 for i, s in enumerate(ep["scenes"]) if not Path(s.get("image_file") or "/none").exists()]
     if missing:
         raise SystemExit(f"FAILED: pictures missing for scenes {missing}")
-    task = (f"Write the YouTube text for today's episode.\n\nTITLE IDEA: {ep['title']}\nSUMMARY: {ep['summary']}\n"
+    task = (f"Write the YouTube text for today's episode.\n\nTITLE IDEA: {ep['title']}\n"
+            f"SUMMARY: {ep.get('summary', ep['title'])}\n"
             f"LESSON: {ep.get('lesson', '')}\n\nLYRICS:\n{ep.get('song_lyrics', '')}")
     yt = ask("youtube", task, parse_youtube)
     fixes = ask("quality", "Check this YouTube text for a Made for Kids channel.\n\n"
@@ -245,7 +259,7 @@ def publish(day: str, dry: bool) -> None:
         yt = ask("youtube", task + "\n\n## Fix requested by the Quality Checker\n" +
                  "\n".join(f"- {b}" for _, b in fixes), parse_youtube)
     cmd = [str(HOME / "venv-media/bin/python"), str(SKILLS / "minitoon-daily-telegram/publish_day.py"), str(ep_path),
-           "--title", yt["title"], "--description", yt["description"], "--tags", yt["tags"], "--shorts", "4"]
+           "--title", yt["title"], "--description", yt["description"], "--tags", yt["tags"], "--shorts", "3"]  # 3 keeps room in YouTube's daily upload quota
     if dry:
         cmd.append("--dry-run")
     log("rendering and posting (10-20 minutes)")
@@ -258,6 +272,10 @@ def publish(day: str, dry: bool) -> None:
     if not dry:
         with log_file.open("a") as f:
             f.write(f"{day} | {yt['title']} | {result.get('wide')} | {'; '.join(result.get('shorts', []))}\n")
+        # Growth Manager: thumbnail + playlists. Never blocks the post.
+        g = subprocess.run([str(HOME / "venv-youtube/bin/python"), str(SKILLS / "minitoon-daily-telegram/growth.py"),
+                            "after-post", "--date", day], capture_output=True, text=True)
+        result["growth"] = (g.stdout.strip() or g.stderr.strip()[-200:]).splitlines()
     print(json.dumps({"title": yt["title"], **result}, indent=2))
 
 

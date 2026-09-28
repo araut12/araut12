@@ -20,18 +20,16 @@ Runs automatically at 8 AM (`TEAM pitch`), which sends the user the intro, the S
 and 7 picture prompts as separate messages. If the user says "new idea", or no pitch arrived, run
 `TEAM pitch` yourself (takes about 2 minutes), then reply only "New pitch sent ✅".
 
-## When the user sends things
-- Pictures → save them in today's folder as `01.jpg` ... `07.jpg` and set `image_file` on the matching
-  scene in `episode.json`. Reply briefly: "Got 3 of 7 ✅". Out of order or extras: match each scene to the
-  picture that best shows it (compare with each scene's `lyrics` and `image`), skip near-duplicates, and
-  say the mapping in one line.
-- An audio file (MP3/M4A/WAV from Suno) → copy it to today's folder as `song.mp3`, set `"song_file"` to
-  its full path in `episode.json`. Reply "Got the song 🎵". If they send two, use the last one.
-- All 7 pictures in (and the song, or the user says "go" / "no song") →
-  reply "🎬 Making the video now, about 15-20 minutes", then run `TEAM publish` (it writes the YouTube text,
-  has it checked, renders the wide video to the song's exact length, cuts 4 chorus Shorts, posts the wide
-  video and schedules the Shorts 3 hours apart). Then reply with the title, the main video link, and the
-  Shorts with their times. If it prints FAILED, reply with that error in plain words.
+## When the user sends pictures or a song
+Do NOTHING with them yourself. An automatic intake (`intake.py`, every 5 minutes) saves them, matches
+pictures to scenes, reports "Got 5 of 7 ✅", and starts the video once all pictures and the song are in.
+Just reply: "Thanks! 👍 I'll pick them up within 5 minutes." Never claim a video is being made or posted
+unless you actually saw it in `episode.json` (`status` and `youtube`).
+- If the user says "go" or "no song" (all pictures in, no MP3): run
+  `python3 ~/.openclaw/workspace-minitoon/skills/minitoon-daily-telegram/team.py publish` and reply with the
+  links it prints, or its FAILED error.
+- If the user asks for the status: read today's `episode.json` and report `status`, how many scenes have
+  `image_file`, whether `song_file` is set, and the `youtube` links.
 
 ## Feedback trains the team
 When the user comments on the story, song, pictures or YouTube text ("the song was boring", "Bunny's ears

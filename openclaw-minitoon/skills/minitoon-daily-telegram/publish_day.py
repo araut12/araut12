@@ -61,6 +61,7 @@ def main() -> None:
         # Mark posted now, so a Short failing below can never cause the main video to be uploaded twice.
         ep["status"] = "posted"
         ep["youtube"] = {"wide": link}
+        ep["wide_file"] = wide  # kept for the weekly compilation
         ep_path.write_text(json.dumps(ep, indent=2))
         now = datetime.now().astimezone()
         result["shorts"] = []
