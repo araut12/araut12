@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mission Control</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1b1f24; --muted:#667085; --line:#e4e7ec; --ok:#12805c; --bad:#c4320a; --accent:#3d5afe; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0e1116; --card:#161b22; --text:#e6edf3; --muted:#8b949e; --line:#30363d; --ok:#3fb950; --bad:#f85149; --accent:#7c93ff; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:14px 16px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); }
+  h1 { font-size:18px; margin:0; }
+  main { max-width:1100px; margin:0 auto; padding:16px; display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; min-width:0; }
+  h2 { font-size:14px; margin:0 0 10px; display:flex; gap:8px; align-items:center; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
+  .dot.ok { background:var(--ok); } .dot.bad { background:var(--bad); }
+  pre { margin:0; white-space:pre-wrap; word-break:break-word; font:12px/1.5 ui-monospace, Menlo, Consolas, monospace; color:var(--muted); max-height:260px; overflow:auto; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:8px 0; border-top:1px solid var(--line); }
+  .row:first-of-type { border-top:0; }
+  .muted { color:var(--muted); font-size:13px; }
+  a { color:var(--accent); }
+  button, input { font:inherit; border-radius:8px; border:1px solid var(--line); padding:7px 12px; background:var(--card); color:var(--text); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; cursor:pointer; }
+  #login { max-width:340px; margin:18vh auto; display:grid; gap:10px; padding:0 16px; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<form id="login" class="hidden">
+  <h1>Mission Control</h1>
+  <input name="token" type="password" placeholder="Password" autocomplete="current-password" required>
+  <button class="primary">Sign in</button>
+  <div id="loginErr" class="muted"></div>
+</form>
+
+<div id="app" class="hidden">
+  <header><h1>Mission Control</h1><span class="muted" id="updated">Loading…</span></header>
+  <main>
+    <section><h2>Scheduled jobs</h2><div id="jobs"></div></section>
+    <section><h2>Recent video posts</h2><div id="posts"></div></section>
+    <div id="panels" style="display:contents"></div>
+  </main>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function load() {
+  const r = await fetch("/api/state");
+  if (r.status === 401) { $("#app").classList.add("hidden"); $("#login").classList.remove("hidden"); return; }
+  const s = await r.json();
+  $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
+
+  $("#jobs").innerHTML = s.jobs.length ? s.jobs.map(j => {
+    const next = j.nextRunAt || j.next_run_at || j.state?.nextRunAtMs && new Date(j.state.nextRunAtMs).toLocaleString() || "";
+    const last = j.lastStatus || j.state?.lastStatus || "";
+    return `<div class="row"><div><b>${esc(j.name || j.id)}</b><div class="muted">${esc(j.schedule?.expr || j.cron || "")} ${next ? "· next " + esc(next) : ""} ${last ? "· last " + esc(last) : ""}</div></div>
+      <button data-job="${esc(j.name || j.id)}">Run now</button></div>`;
+  }).join("") : `<div class="muted">No job details (see “Scheduled jobs” panel below).</div>`;
+
+  $("#posts").innerHTML = s.posts.length ? s.posts.map(p => `<div class="row"><div>
+      <span class="dot ${p.ok ? "ok" : "bad"}" style="display:inline-block"></span> <b>${esc(p.title)}</b>
+      <div class="muted">${esc(new Date(p.at).toLocaleString())}</div>
+      <div class="muted">${Object.entries(p.results || {}).map(([k, v]) =>
+        `${esc(k)}: ${String(v).startsWith("http") ? `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a>` : esc(v)}`).join("<br>")}</div>
+    </div></div>`).join("") : `<div class="muted">No posts yet.</div>`;
+
+  $("#panels").innerHTML = Object.entries(s.panels).map(([t, r]) =>
+    `<section><h2><span class="dot ${r.ok ? "ok" : "bad"}"></span>${esc(t)}</h2><pre>${esc(r.output || "(no output)")}</pre></section>`).join("");
+
+  $("#updated").textContent = "Updated " + new Date().toLocaleTimeString();
+}
+
+$("#login").onsubmit = async e => {
+  e.preventDefault();
+  const r = await fetch("/api/login", { method: "POST", body: new URLSearchParams(new FormData(e.target)) });
+  if (r.ok) load(); else $("#loginErr").textContent = "Wrong password";
+};
+
+document.addEventListener("click", async e => {
+  const job = e.target.dataset?.job;
+  if (!job || !confirm(`Run "${job}" now?`)) return;
+  e.target.disabled = true; e.target.textContent = "Running…";
+  const r = await (await fetch("/api/run", { method: "POST", body: new URLSearchParams({ job }) })).json();
+  alert(r.output || r.error || "Started");
+  e.target.disabled = false; e.target.textContent = "Run now";
+  load();
+});
+
+load();
+setInterval(() => { if (!document.hidden) load(); }, 30000);
+</script>
+</body>
+</html>
