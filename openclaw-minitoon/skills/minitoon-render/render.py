@@ -333,7 +333,8 @@ def main() -> None:
 
     if song_mode:
         # Whole video is the song: split its length across the scenes by how much each one sings.
-        total = min(duration(song), 175.0)  # Shorts can be up to 3 minutes
+        # The video is exactly as long as the song (a vertical Short is capped at YouTube's 3 minutes).
+        total = duration(song) if ASPECT == "16:9" else min(duration(song), 175.0)
         weights = [max(1, len((s.get("lyrics") or s.get("narration") or "x").split())) for s in scenes]
         lengths = [total * w / sum(weights) for w in weights]
         music, have_music = None, False
