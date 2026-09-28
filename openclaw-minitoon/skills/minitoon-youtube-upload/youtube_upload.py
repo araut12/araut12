@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Upload a Minitoon video to YouTube as a Short (free: YouTube Data API).
+
+One-time sign-in:  youtube_upload.py --login
+Upload:            youtube_upload.py VIDEO --title T --description D --tags a,b [--privacy public]
+
+Needs ~/.openclaw/secrets/youtube_client_secret.json (Google Cloud OAuth "Desktop app" client).
+"""
+import argparse
+from pathlib import Path
+
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
+SECRETS = Path.home() / ".openclaw/secrets"
+CLIENT = SECRETS / "youtube_client_secret.json"
+TOKEN = SECRETS / "youtube_token.json"
+SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+
+
+def credentials(interactive: bool = False) -> Credentials:
+    creds = Credentials.from_authorized_user_file(str(TOKEN), SCOPES) if TOKEN.exists() else None
+    if creds and creds.valid:
+        return creds
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    elif interactive:
+        flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT), SCOPES)
+        creds = flow.run_local_server(port=8765, open_browser=False,
+                                      authorization_prompt_message="Open this link in your browser:\n{url}\n")
+    else:
+        raise SystemExit("YouTube not signed in. Run: youtube_upload.py --login")
+    TOKEN.write_text(creds.to_json())
+    TOKEN.chmod(0o600)
+    return creds
+
+
+def upload(video: str, title: str, description: str, tags: list[str], privacy: str,
+           short: bool = True, publish_at: str | None = None) -> str:
+    youtube = build("youtube", "v3", credentials=credentials())
+    if short and "#shorts" not in (title + description).lower():
+        description = f"{description}\n\n#Shorts".strip()
+    if not short:
+        description = description.replace("#Shorts", "").replace("#shorts", "").strip()
+    body = {
+        "snippet": {"title": title[:100], "description": description[:5000],
+                    "tags": tags, "categoryId": "1"},  # Film & Animation
+        "status": {
+            "privacyStatus": privacy,
+            # Minitoon is made for children 3-8; YouTube (COPPA) requires this flag.
+            "selfDeclaredMadeForKids": True,
+            "containsSyntheticMedia": True,
+        },
+    }
+    if publish_at:
+        # Scheduled: stays private until publish_at (RFC 3339), then YouTube makes it public.
+        body["status"]["privacyStatus"] = "private"
+        body["status"]["publishAt"] = publish_at
+    media = MediaFileUpload(video, mimetype="video/mp4", chunksize=8 << 20, resumable=True)
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+    response = None
+    while response is None:
+        _, response = request.next_chunk()
+    kind = "shorts/" if short else "watch?v="
+    when = f"scheduled {publish_at}" if publish_at else privacy
+    return f"https://youtube.com/{kind}{response['id']} ({when})"
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("video", nargs="?")
+    p.add_argument("--title")
+    p.add_argument("--description", default="")
+    p.add_argument("--tags", default="")
+    p.add_argument("--privacy", default="private", choices=["public", "unlisted", "private"])
+    p.add_argument("--wide", action="store_true", help="regular 16:9 video, not a Short")
+    p.add_argument("--publish-at", help="schedule: RFC 3339 time, e.g. 2026-09-28T14:00:00+08:00")
+    p.add_argument("--login", action="store_true")
+    a = p.parse_args()
+    if a.login:
+        credentials(interactive=True)
+        print(f"Signed in. Token saved to {TOKEN}")
+    elif a.video and a.title:
+        tags = [t.strip() for t in a.tags.split(",") if t.strip()]
+        print(upload(a.video, a.title, a.description, tags, a.privacy, short=not a.wide,
+                     publish_at=a.publish_at))
+    else:
+        p.error("give VIDEO and --title, or --login")
