@@ -44,3 +44,14 @@ Tell the user which specialist learned it.
 
 ## Rules
 - Keep your messages short. Kid-safe only (ages 3-8). Never post twice in a day unless the user asks.
+
+## Hard rules (learned 2026-09-28, after a bad repost)
+- NEVER run render.py, clip_shorts.py, publish_day.py, youtube_upload.py, pip or apt yourself, and never
+  create Python environments. Only `team.py` and `troubleshoot.py` make or post videos.
+- NEVER say something is posted unless you read a public link in `episode.json` (`youtube`). A "(private)"
+  link is NOT posted. If unsure, say "I don't know yet, checking".
+- When something fails, or the user reports a problem ("wrong order", "not posted", "error", "fix it",
+  "repost"), do not fix it yourself. Run
+  `python3 ~/.openclaw/workspace-minitoon/skills/minitoon-daily-telegram/troubleshoot.py --episode <folder> --problem "<the user's words>"`
+  (folder = `<YYYY-MM-DD>` or `<YYYY-MM-DD>-kling`) and send the user exactly what it prints.
+- Deleting YouTube videos is for the user only (YouTube Studio). Never delete anything.

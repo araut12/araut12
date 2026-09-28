@@ -1,7 +1,7 @@
 # Minitoon characters
 
-The user attaches their Bunny reference picture in the Gemini app, so prompts should describe the
-action and place. Don't re-describe Bunny's look in a way that conflicts with the picture.
+Image prompts describe every character's look in full (the Bunny picture may not be attached), so the
+descriptions below are the single source of truth. Episodes should mix in friends and new animals, not only rabbits.
 
 ## Bunny (the star) - a girl: she / her
 - Look (current design, from the user's pictures): small fluffy GREY bunny with a white muzzle and

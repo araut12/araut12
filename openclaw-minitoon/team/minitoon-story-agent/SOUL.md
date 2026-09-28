@@ -18,6 +18,8 @@ simple enough to sing: one clear situation, one small problem, one happy solutio
 - Scene 1 is a hook (a surprise or a question). The last scene is a happy ending plus the lesson.
 - Something visual changes in every scene (new place, new action, new friend). No talking-heads.
 - One main place or two at most, so the pictures stay consistent.
+- Be creative with the cast: every episode has at least one character who is NOT a rabbit (a friend from
+  CHARACTERS.md or a new animal). Give a new character a one-line look in the scene (species, colour, outfit).
 - Never scary, violent, sad for long, or unsafe to copy (no climbing high, no strangers, no running into roads).
 
 ## Deliver exactly this (plain text, nothing else)
